@@ -1,7 +1,3 @@
-/**
- * src/App.tsx
- * メインUI: 設定、カウンター、ゲームオーバー画面
- */
 import { useState } from 'react';
 import { GameCanvas } from './components/GameCanvas';
 import { type GameConfig, DIFFICULTY_PRESETS } from './logic/GameCore.ts';
@@ -18,19 +14,29 @@ function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [gameState, setGameState] = useState<'INIT' | 'GENERATING' | 'PLAYING' | 'WON' | 'LOST'>('INIT');
   const [showSettings, setShowSettings] = useState(true);
-  const [minesLeft, setMinesLeft] = useState(10); // 残り地雷数表示用
+  const [minesLeft, setMinesLeft] = useState(10);
+  
+  // レビューモード（クリア後に盤面を見る状態）
+  const [isReviewing, setIsReviewing] = useState(false);
   
   const [resetCounter, setResetCounter] = useState(0);
 
+  // --- アクション ---
   const handleTryAgain = () => {
     setResetCounter(c => c + 1);
     setGameState('INIT');
+    setIsReviewing(false);
   };
 
   const handleBackToSettings = () => {
     setShowSettings(true);
     setResetCounter(c => c + 1);
     setGameState('INIT');
+    setIsReviewing(false);
+  };
+
+  const handleViewBoard = () => {
+    setIsReviewing(true); // モーダルを閉じて盤面を見せる
   };
 
   const applyPreset = (presetIndex: number) => {
@@ -47,6 +53,7 @@ function App() {
         onGameStateChange={setGameState}
         onMineCountChange={setMinesLeft}
         requestReset={resetCounter}
+        isReviewing={isReviewing}
       />
 
       {/* ヘッダー */}
@@ -58,7 +65,8 @@ function App() {
         backdropFilter: 'blur(10px)',
         borderBottom: `1px solid ${isDarkMode ? '#3a3b3c' : '#e4e6eb'}`,
         boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-        pointerEvents: 'none'
+        pointerEvents: 'none',
+        zIndex: 50
       }}>
         <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '1.2rem', fontWeight: '800', letterSpacing: '-0.5px' }}>
@@ -68,7 +76,6 @@ function App() {
              <span style={badgeStyle(isDarkMode)}>
                {config.topologyType}
              </span>
-             {/* 残り地雷数表示 */}
              <span style={{ ...badgeStyle(isDarkMode), color: minesLeft < 0 ? '#ff4d4d' : 'inherit' }}>
                💣 {minesLeft}
              </span>
@@ -76,12 +83,26 @@ function App() {
         </div>
         
         <div style={{ display: 'flex', gap: '12px', pointerEvents: 'auto' }}>
-          <button onClick={() => setIsDarkMode(!isDarkMode)} style={btnStyle(isDarkMode)}>
-            {isDarkMode ? '☀' : '🌙'}
-          </button>
-          <button onClick={() => setShowSettings(true)} style={btnStyle(isDarkMode)}>
-            ⚙ Settings
-          </button>
+          {/* レビュー中はここにアクションボタンを表示 */}
+          {isReviewing ? (
+            <>
+              <button onClick={handleBackToSettings} style={secondaryBtnStyle(isDarkMode)}>
+                Settings
+              </button>
+              <button onClick={handleTryAgain} style={primaryBtnStyle}>
+                Try Again
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setIsDarkMode(!isDarkMode)} style={btnStyle(isDarkMode)}>
+                {isDarkMode ? '☀' : '🌙'}
+              </button>
+              <button onClick={() => setShowSettings(true)} style={btnStyle(isDarkMode)}>
+                ⚙ Settings
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -146,13 +167,12 @@ function App() {
               animation: 'spin 1s linear infinite'
             }}></div>
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Generating...</div>
-            <div style={{ opacity: 0.8 }}>Creating a "Guess-Free" board</div>
           </div>
         </div>
       )}
 
-      {/* ゲームオーバー/クリア表示 */}
-      {(gameState === 'LOST' || gameState === 'WON') && (
+      {/* ゲームオーバー / クリア表示 (レビュー中は表示しない) */}
+      {(gameState === 'LOST' || gameState === 'WON') && !isReviewing && (
         <div style={modalOverlayStyle}>
           <div style={{ ...modalContentStyle(isDarkMode), textAlign: 'center' }}>
             <h2 style={{ 
@@ -165,12 +185,18 @@ function App() {
               {gameState === 'WON' ? 'All safe cells opened!' : 'You stepped on a mine.'}
             </p>
             
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-              <button onClick={handleBackToSettings} style={secondaryBtnStyle(isDarkMode)}>
-                Back to Settings
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              {/* 盤面を見るボタン */}
+              <button onClick={handleViewBoard} style={secondaryBtnStyle(isDarkMode)}>
+                👁 View Board
               </button>
+              
               <button onClick={handleTryAgain} style={primaryBtnStyle}>
                 Try Again
+              </button>
+              
+              <button onClick={handleBackToSettings} style={{...secondaryBtnStyle(isDarkMode), border: 'none', opacity: 0.7, fontSize: '0.9rem'}}>
+                Settings
               </button>
             </div>
           </div>
@@ -181,7 +207,7 @@ function App() {
   );
 }
 
-// --- Style Objects ---
+// --- Styles ---
 const btnStyle = (dark: boolean) => ({
   padding: '8px 16px',
   background: dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
