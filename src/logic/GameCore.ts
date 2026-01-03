@@ -1,30 +1,35 @@
 /**
- * logic_test_square.ts
- * 目的:
- * 1. 通常の正方形盤面（端がある）での生成テスト
- * 2. 「残り地雷数」を用いた全体推論（Global Count）の実装確認
+ * src/logic/GameCore.ts
+ * マインスイーパーのコアロジック（トポロジー、盤面、ソルバー）を統合
  */
 
-declare var process: any;
+// --- 型定義 ---
+export type TopologyType = 'TORUS' | 'SQUARE';
+export type CellStatus = 'HIDDEN' | 'OPENED' | 'FLAGGED';
 
-const CONFIG = {
-    WIDTH: 48,
-    HEIGHT: 24,
-    MINES: 256,
-    MAX_RETRY: 500
-};
-
-// --- トポロジー定義（通常版：ループなし） ---
-class StandardTopology {
+// ★ここがエラーの原因だった箇所です。必ず export をつけてください★
+export interface GameConfig {
     width: number;
     height: number;
+    mines: number;
+    topologyType: TopologyType;
+}
+
+// =========================================================
+// 1. Topology: 空間のつながりを管理
+// =========================================================
+export class Topology {
+    width: number;
+    height: number;
+    type: TopologyType;
     adjacencyList: number[][];
 
-    constructor(w: number, h: number) {
+    constructor(w: number, h: number, type: TopologyType) {
         this.width = w;
         this.height = h;
+        this.type = type;
         this.adjacencyList = [];
-        this.buildSquareGraph();
+        this.buildGraph();
     }
 
     toIndex(x: number, y: number): number {
@@ -35,22 +40,32 @@ class StandardTopology {
         return { x: index % this.width, y: Math.floor(index / this.width) };
     }
 
-    private buildSquareGraph() {
+    private buildGraph() {
         const total = this.width * this.height;
         for (let i = 0; i < total; i++) {
             const { x, y } = this.toCoord(i);
             const neighbors: number[] = [];
             
-            // 通常の隣接チェック（範囲外に出ないか確認）
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
                     if (dx === 0 && dy === 0) continue;
                     
-                    const nx = x + dx;
-                    const ny = y + dy;
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    let valid = true;
 
-                    // 盤面の外に出ていないかチェック（ここがトーラスとの違い）
-                    if (nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+                    if (this.type === 'TORUS') {
+                        // トーラス: ループさせる
+                        nx = (nx + this.width) % this.width;
+                        ny = (ny + this.height) % this.height;
+                    } else {
+                        // スクエア: 範囲外なら無効
+                        if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) {
+                            valid = false;
+                        }
+                    }
+
+                    if (valid) {
                         neighbors.push(this.toIndex(nx, ny));
                     }
                 }
@@ -64,14 +79,16 @@ class StandardTopology {
     }
 }
 
-// --- 盤面クラス (Board) ---
-class Board {
-    topology: StandardTopology;
+// =========================================================
+// 2. Board: 盤面の状態管理
+// =========================================================
+export class Board {
+    topology: Topology;
     mines: boolean[];
-    status: ('HIDDEN' | 'OPENED' | 'FLAGGED')[];
+    status: CellStatus[];
     neighborMineCounts: number[];
 
-    constructor(topology: StandardTopology) {
+    constructor(topology: Topology) {
         this.topology = topology;
         const size = topology.width * topology.height;
         this.mines = new Array(size).fill(false);
@@ -83,15 +100,18 @@ class Board {
         const newBoard = new Board(this.topology);
         newBoard.status = [...this.status];
         newBoard.neighborMineCounts = [...this.neighborMineCounts];
+        // minesはコピーしない（ソルバーはminesを知らない前提のため）
         return newBoard;
     }
 
+    // 地雷配置と数字計算
     placeMines(mineCount: number, startIndex: number) {
         const size = this.topology.width * this.topology.height;
+        // 初手とその周囲は安全地帯
         const safeZone = new Set([startIndex, ...this.topology.getNeighbors(startIndex)]);
+        
         let placed = 0;
         let safety = 0;
-        
         while (placed < mineCount && safety < size * 20) {
             safety++;
             const idx = Math.floor(Math.random() * size);
@@ -118,25 +138,43 @@ class Board {
         }
     }
 
-    open(index: number) {
-        if (this.status[index] !== 'HIDDEN') return;
+    // 開封処理（戻り値: 爆発したかどうか）
+    open(index: number): boolean {
+        if (this.status[index] !== 'HIDDEN') return false;
+        
+        if (this.mines[index]) {
+            this.status[index] = 'OPENED'; // 爆発表示用
+            return true; // GAME OVER
+        }
+
         this.status[index] = 'OPENED';
         if (this.neighborMineCounts[index] === 0) {
             for (const n of this.topology.getNeighbors(index)) {
                 this.open(n);
             }
         }
+        return false;
+    }
+
+    toggleFlag(index: number) {
+        if (this.status[index] === 'HIDDEN') {
+            this.status[index] = 'FLAGGED';
+        } else if (this.status[index] === 'FLAGGED') {
+            this.status[index] = 'HIDDEN';
+        }
     }
 }
 
-// --- ソルバー ---
-class Solver {
+// =========================================================
+// 3. Solver: 運ゲー判定・厳密モード判定用
+// =========================================================
+export class Solver {
     board: Board;
-    topology: StandardTopology;
+    topology: Topology;
     knownMines: Set<number>;
     knownSafe: Set<number>;
     isValidState: boolean;
-    totalMines: number; // 全体の地雷数設定
+    totalMines: number;
 
     constructor(board: Board, totalMines: number) {
         this.board = board;
@@ -154,7 +192,7 @@ class Solver {
         return newSolver;
     }
 
-    // 1. 基本推論
+    // --- ロジックLv1: 基本推論 ---
     solveBasicStep(): boolean {
         let changed = false;
         const size = this.topology.width * this.topology.height;
@@ -163,6 +201,7 @@ class Solver {
             if (this.board.status[i] === 'OPENED' && this.board.neighborMineCounts[i] > 0) {
                 const neighbors = this.topology.getNeighbors(i);
                 
+                // 「未知」かつ「未確定」なマス
                 const hiddenNeighbors = neighbors.filter(n => 
                     this.board.status[n] === 'HIDDEN' && 
                     !this.knownSafe.has(n) && 
@@ -170,37 +209,25 @@ class Solver {
                 );
                 
                 const knownMinesCount = neighbors.filter(n => this.knownMines.has(n)).length;
+                
+                // 矛盾チェック
                 if (knownMinesCount > this.board.neighborMineCounts[i]) {
-                    this.isValidState = false; 
-                    return false;
+                    this.isValidState = false; return false;
                 }
-
                 const remainingMines = this.board.neighborMineCounts[i] - knownMinesCount;
-
-                if (remainingMines > hiddenNeighbors.length) {
-                    this.isValidState = false; 
-                    return false;
-                }
-                if (remainingMines < 0) {
-                    this.isValidState = false;
-                    return false;
+                if (remainingMines > hiddenNeighbors.length || remainingMines < 0) {
+                    this.isValidState = false; return false;
                 }
 
+                // 確定処理
                 if (remainingMines === hiddenNeighbors.length && remainingMines > 0) {
                     for (const n of hiddenNeighbors) {
-                        if (!this.knownMines.has(n)) {
-                            this.knownMines.add(n);
-                            changed = true;
-                        }
+                        if (!this.knownMines.has(n)) { this.knownMines.add(n); changed = true; }
                     }
                 }
-
                 if (remainingMines === 0 && hiddenNeighbors.length > 0) {
                     for (const n of hiddenNeighbors) {
-                        if (!this.knownSafe.has(n) && !this.knownMines.has(n)) {
-                            this.knownSafe.add(n);
-                            changed = true;
-                        }
+                        if (!this.knownSafe.has(n) && !this.knownMines.has(n)) { this.knownSafe.add(n); changed = true; }
                     }
                 }
             }
@@ -208,55 +235,43 @@ class Solver {
         return changed;
     }
 
-    // 2. 全体地雷数からの推論 (Global Count Logic)
-    // 【重要】これが通常の正方形盤面では必須になります
+    // --- ロジックLv2: 全体カウント (Global Count) ---
     solveGlobalLogic(): boolean {
         const size = this.topology.width * this.topology.height;
         let unknownCells: number[] = [];
         
-        // 未確定マスを全列挙
         for (let i = 0; i < size; i++) {
             if (this.board.status[i] === 'HIDDEN' && !this.knownSafe.has(i) && !this.knownMines.has(i)) {
                 unknownCells.push(i);
             }
         }
-
         if (unknownCells.length === 0) return false;
 
         const currentFoundMines = this.knownMines.size;
         const minesLeft = this.totalMines - currentFoundMines;
 
-        // 矛盾チェック
         if (minesLeft < 0 || minesLeft > unknownCells.length) {
-            this.isValidState = false;
-            return false;
+            this.isValidState = false; return false;
         }
 
-        // ルールA: 残り地雷数 == 未確定マス数 -> 全て地雷
         if (minesLeft === unknownCells.length) {
-            for (const idx of unknownCells) {
-                this.knownMines.add(idx);
-            }
+            for (const idx of unknownCells) this.knownMines.add(idx);
             return true;
         }
-
-        // ルールB: 残り地雷数 == 0 -> 全て安全
         if (minesLeft === 0) {
-            for (const idx of unknownCells) {
-                this.knownSafe.add(idx);
-            }
+            for (const idx of unknownCells) this.knownSafe.add(idx);
             return true;
         }
-
         return false;
     }
 
-    // 3. 背理法
+    // --- ロジックLv3: 背理法 (Deep Logic) ---
     solveDeepLogic(): boolean {
         let changed = false;
         const size = this.topology.width * this.topology.height;
+        
+        // フロンティア（数字マスの隣にある未確定マス）のみを対象にする
         const frontierCells = new Set<number>();
-
         for (let i = 0; i < size; i++) {
             if (this.board.status[i] === 'OPENED' && this.board.neighborMineCounts[i] > 0) {
                 const neighbors = this.topology.getNeighbors(i);
@@ -269,59 +284,43 @@ class Solver {
         }
 
         for (const targetIdx of frontierCells) {
-            // Case 1: Assume Mine
+            // 仮定1: 地雷だとしたら？
             const simMine = Solver.fromSnapshot(this);
             simMine.knownMines.add(targetIdx);
-            
             let subChanged = true;
             while(subChanged && simMine.isValidState) {
                 subChanged = simMine.solveBasicStep();
-                // 背理法の中でもグローバルカウントは有効
-                if(subChanged) subChanged = simMine.solveGlobalLogic(); 
+                if(subChanged) subChanged = simMine.solveGlobalLogic();
             }
-
             if (!simMine.isValidState) {
-                if (!this.knownSafe.has(targetIdx)) {
-                    this.knownSafe.add(targetIdx);
-                    changed = true;
-                    continue; 
-                }
+                if (!this.knownSafe.has(targetIdx)) { this.knownSafe.add(targetIdx); changed = true; continue; }
             }
 
-            // Case 2: Assume Safe
+            // 仮定2: 安全だとしたら？
             const simSafe = Solver.fromSnapshot(this);
             simSafe.knownSafe.add(targetIdx);
-
             subChanged = true;
             while(subChanged && simSafe.isValidState) {
                 subChanged = simSafe.solveBasicStep();
                 if(subChanged) subChanged = simSafe.solveGlobalLogic();
             }
-
             if (!simSafe.isValidState) {
-                if (!this.knownMines.has(targetIdx)) {
-                    this.knownMines.add(targetIdx);
-                    changed = true;
-                }
+                if (!this.knownMines.has(targetIdx)) { this.knownMines.add(targetIdx); changed = true; }
             }
         }
         return changed;
     }
 
+    // 運ゲーなしで解けるかチェック
     checkSolvability(startIndex: number): boolean {
         this.board.open(startIndex);
         let stuck = false;
-        
         while (!stuck) {
             let changed = this.solveBasicStep();
-            
-            // 基本推論で止まったら全体カウント
             if (!changed) changed = this.solveGlobalLogic();
+            if (!changed) changed = this.solveDeepLogic(); // 重いので最後
 
-            // それでも止まったら背理法
-            if (!changed) changed = this.solveDeepLogic();
-
-            // 確定マスを開く
+            // 安全確定を開く
             let openChanged = false;
             const safeList = Array.from(this.knownSafe);
             for (const safeIdx of safeList) {
@@ -330,65 +329,34 @@ class Solver {
                     openChanged = true;
                 }
             }
-
-            if (!changed && !openChanged) {
-                stuck = true;
-            }
+            if (!changed && !openChanged) stuck = true;
         }
 
+        // 全ての非地雷マスが開かれたか
         const size = this.topology.width * this.topology.height;
         for (let i = 0; i < size; i++) {
-            if (!this.board.mines[i] && this.board.status[i] !== 'OPENED') {
-                return false;
-            }
+            if (!this.board.mines[i] && this.board.status[i] !== 'OPENED') return false;
         }
         return true;
     }
 }
 
-// --- メイン実行部 ---
-async function runTest() {
-    try {
-        console.log(`=== 通常正方形・全体カウント付きテスト ===`);
-        console.log(`設定: ${CONFIG.WIDTH}x${CONFIG.HEIGHT}, 地雷: ${CONFIG.MINES}`);
-        
-        const topology = new StandardTopology(CONFIG.WIDTH, CONFIG.HEIGHT);
-        const startTime = Date.now();
-        let attempts = 0;
-        let success = false;
+// --- ユーティリティ: 盤面生成 ---
+export function generateBoard(config: GameConfig, startIndex: number): Board | null {
+    const topology = new Topology(config.width, config.height, config.topologyType);
+    const board = new Board(topology);
+    board.placeMines(config.mines, startIndex);
 
-        console.log("生成ループを開始します...");
-
-        while (!success && attempts < CONFIG.MAX_RETRY) {
-            attempts++;
-            if (attempts % 1 === 0) process.stdout.write(`\r試行中... ${attempts}回目`);
-
-            const board = new Board(topology);
-            const startNode = Math.floor(Math.random() * (CONFIG.WIDTH * CONFIG.HEIGHT));
-            board.placeMines(CONFIG.MINES, startNode);
-
-            const solver = new Solver(board, CONFIG.MINES);
-            if (solver.checkSolvability(startNode)) {
-                success = true;
-            }
+    const solver = new Solver(board, config.mines);
+    if (solver.checkSolvability(startIndex)) {
+        // 解ける盤面なら、Boardの状態をHIDDENに戻して返す
+        // (Solverでシミュレーション開封されているため)
+        for(let i=0; i<board.status.length; i++) {
+            board.status[i] = 'HIDDEN';
         }
-        
-        const endTime = Date.now();
-        const totalTime = endTime - startTime;
-
-        console.log(`\n-------------------------------------------------------`);
-        if (success) {
-            console.log(`[成功] 通常正方形盤面の生成完了`);
-            console.log(`試行回数: ${attempts}回`);
-            console.log(`総経過時間: ${totalTime}ms`);
-            console.log(`平均時間: ${(totalTime / attempts).toFixed(2)}ms`);
-        } else {
-            console.log(`[失敗] 生成できませんでした。角や端の詰まりが原因の可能性があります。`);
-        }
-
-    } catch (e) {
-        console.error(e);
+        // スタート位置だけは開けておく
+        board.open(startIndex);
+        return board;
     }
+    return null;
 }
-
-runTest();
