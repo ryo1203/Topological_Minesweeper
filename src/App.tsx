@@ -70,7 +70,7 @@ function App() {
       }}>
         <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '1.2rem', fontWeight: '800', letterSpacing: '-0.5px' }}>
-            Topological Minesweeper
+            Topological Minesweeper (beta)
           </h1>
           <div style={{ display: 'flex', gap: '8px' }}>
              <span style={badgeStyle(isDarkMode)}>
