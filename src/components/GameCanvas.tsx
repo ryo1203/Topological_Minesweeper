@@ -7,10 +7,47 @@ interface GameCanvasProps {
     onGameStateChange: (state: 'INIT' | 'GENERATING' | 'PLAYING' | 'WON' | 'LOST') => void;
     onMineCountChange: (count: number) => void;
     requestReset: number;
+    requestRecenter: number;
+    zoomLevel: number;
     isReviewing: boolean;
 }
 
-const CELL_SIZE = 40;
+const BASE_CELL_SIZE = 40;
+
+// 座標変換ヘルパー
+function mapCoordinates(col: number, row: number, config: GameConfig): { tx: number, ty: number, isValid: boolean } {
+    const w = config.width;
+    const h = config.height;
+    
+    // 何周目か
+    const loopX = Math.floor(col / w);
+    const loopY = Math.floor(row / h);
+
+    let tx = ((col % w) + w) % w;
+    let ty = ((row % h) + h) % h;
+    
+    let isValid = true;
+
+    switch (config.topologyType) {
+        case 'SQUARE':
+            if (loopX !== 0 || loopY !== 0) isValid = false;
+            break;
+        case 'TORUS':
+            break;
+        case 'MOBIUS':
+            if (loopY !== 0) isValid = false;
+            else if (loopX % 2 !== 0) ty = h - 1 - ty;
+            break;
+        case 'KLEIN':
+            if (loopY % 2 !== 0) tx = w - 1 - tx;
+            break;
+        case 'PROJECTIVE':
+            if (loopX % 2 !== 0) ty = h - 1 - ty;
+            if (loopY % 2 !== 0) tx = w - 1 - tx;
+            break;
+    }
+    return { tx, ty, isValid };
+}
 
 const THEME = {
     LIGHT: {
@@ -38,9 +75,10 @@ const THEME = {
 const NUMBER_COLORS = ['', '#1877f2', '#42b72a', '#f5533d', '#7b1fa2', '#ff9800', '#00bcd4', '#000000', '#7f8c8d'];
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({ 
-    config, isDarkMode, onGameStateChange, onMineCountChange, requestReset, isReviewing 
+    config, isDarkMode, onGameStateChange, onMineCountChange, requestReset, requestRecenter, zoomLevel, isReviewing 
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const CELL_SIZE = BASE_CELL_SIZE * zoomLevel;
     
     // パフォーマンスのためRefで座標管理
     const cameraRef = useRef({ x: 0, y: 0 });
@@ -53,35 +91,43 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     
     const colors = isDarkMode ? THEME.DARK : THEME.LIGHT;
 
-    // --- 初期化（位置合わせ） ---
-    const resetCamera = useCallback(() => {
+    // --- カメラ位置計算ヘルパー ---
+    const calculateCenterPosition = useCallback(() => {
         const screenW = window.innerWidth;
         const screenH = window.innerHeight;
         const boardW = config.width * CELL_SIZE;
         const boardH = config.height * CELL_SIZE;
         
-        // X座標: 常に画面中央
         const centerX = Math.floor((screenW - boardW) / 2);
-
-        // Y座標: 中央寄せするが、ヘッダー(約80px)より上には行かないように制限
-        // これにより、盤面が画面より大きい場合でも上端が見える位置から始まる
         const centerY = Math.floor((screenH - boardH) / 2);
         const safeY = Math.max(80, centerY);
+        
+        return { x: centerX, y: safeY };
+    }, [config.width, config.height, CELL_SIZE]);
 
-        cameraRef.current = {
-            x: centerX,
-            y: safeY
-        };
-    }, [config]);
-
-    // リセット処理
+    // Recenter リクエスト監視（ズーム変更時やボタン押下時）
     useEffect(() => {
-        resetCamera();
+        // requestRecenter が変更された時だけ実行したいが、
+        // CELL_SIZE が変わった時も位置合わせしたい場合はここに入れる。
+        // 今回はまずボタン押下時のみに限定し、ズーム時はそのまま（または別途対応）にするか、
+        // ユーザー体験的には「ズームしたら位置がおかしくなる」のを防ぐため、ズーム時もセンター寄せしてもいいかもしれない。
+        // しかし、特定箇所を見たい場合に勝手に動くと困る。
+        // ここでは「Centerボタン」等の明示的なリクエストのみで動くようにする。
+        cameraRef.current = calculateCenterPosition();
+    }, [requestRecenter, calculateCenterPosition]);
+
+    // リセット処理（Config変更、リセットボタン）
+    // 注意: ここで CELL_SIZE (zoomLevel) が変わったことで発火しないように制御する
+    useEffect(() => {
+        cameraRef.current = calculateCenterPosition();
+        
         setBoard(null);
         setGameState('INIT');
         onGameStateChange('INIT');
         onMineCountChange(config.mines);
-    }, [config, requestReset, resetCamera, onGameStateChange, onMineCountChange]);
+        
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [config, requestReset, onGameStateChange, onMineCountChange /* CELL_SIZE, calculateCenterPosition はあえて外す */]);
 
     // --- 描画ループ ---
     const draw = useCallback(() => {
@@ -109,18 +155,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
                 const px = Math.floor(col * CELL_SIZE + cam.x);
                 const py = Math.floor(row * CELL_SIZE + cam.y);
 
-                // 論理座標への変換
-                let tx = col;
-                let ty = row;
+                const { tx, ty, isValid } = mapCoordinates(col, row, config);
 
-                if (config.topologyType === 'TORUS') {
-                    // ループ処理
-                    tx = (col % config.width + config.width) % config.width;
-                    ty = (row % config.height + config.height) % config.height;
-                } else {
-                    // スクエアの場合は範囲外を描画しない
-                    if (tx < 0 || tx >= config.width || ty < 0 || ty >= config.height) continue;
-                }
+                if (!isValid) continue;
 
                 // 盤面データ取得
                 let status = 'HIDDEN';
@@ -194,7 +231,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         ctx.lineWidth = 3;
         ctx.strokeRect(cam.x, cam.y, mainW, mainH);
 
-    }, [board, config, colors, isDarkMode, gameState, isReviewing]);
+    }, [board, config, colors, isDarkMode, gameState, isReviewing, CELL_SIZE]);
 
     // アニメーションループ
     useEffect(() => {
@@ -260,15 +297,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         const col = Math.floor((canvasX - cam.x) / CELL_SIZE);
         const row = Math.floor((canvasY - cam.y) / CELL_SIZE);
 
-        let tx = col;
-        let ty = row;
+        const { tx, ty, isValid } = mapCoordinates(col, row, config);
 
-        if (config.topologyType === 'TORUS') {
-            tx = (col % config.width + config.width) % config.width;
-            ty = (row % config.height + config.height) % config.height;
-        } else {
-            if (tx < 0 || tx >= config.width || ty < 0 || ty >= config.height) return;
-        }
+        if (!isValid) return;
 
         const index = ty * config.width + tx;
 

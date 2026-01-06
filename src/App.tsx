@@ -20,6 +20,8 @@ function App() {
   const [isReviewing, setIsReviewing] = useState(false);
   
   const [resetCounter, setResetCounter] = useState(0);
+  const [recenterCounter, setRecenterCounter] = useState(0);
+  const [zoomLevel, setZoomLevel] = useState(1.0);
 
   // --- アクション ---
   const handleTryAgain = () => {
@@ -27,6 +29,13 @@ function App() {
     setGameState('INIT');
     setIsReviewing(false);
   };
+
+  const handleRecenter = () => {
+    setRecenterCounter(c => c + 1);
+  };
+
+  const handleZoomIn = () => setZoomLevel(z => Math.min(2.0, z + 0.1));
+  const handleZoomOut = () => setZoomLevel(z => Math.max(0.5, z - 0.1));
 
   const handleBackToSettings = () => {
     setShowSettings(true);
@@ -53,6 +62,8 @@ function App() {
         onGameStateChange={setGameState}
         onMineCountChange={setMinesLeft}
         requestReset={resetCounter}
+        requestRecenter={recenterCounter}
+        zoomLevel={zoomLevel}
         isReviewing={isReviewing}
       />
 
@@ -95,6 +106,17 @@ function App() {
             </>
           ) : (
             <>
+              <div style={{ display: 'flex', gap: '4px', marginRight: '8px' }}>
+                <button onClick={handleZoomOut} style={btnStyle(isDarkMode)} title="Zoom Out">－</button>
+                <button onClick={handleZoomIn} style={btnStyle(isDarkMode)} title="Zoom In">＋</button>
+              </div>
+              <button 
+                onClick={handleRecenter} 
+                style={btnStyle(isDarkMode)} 
+                title="Reset Camera Position"
+              >
+                ⌖ Center
+              </button>
               <button onClick={() => setIsDarkMode(!isDarkMode)} style={btnStyle(isDarkMode)}>
                 {isDarkMode ? '☀' : '🌙'}
               </button>
@@ -129,14 +151,18 @@ function App() {
 
             <section style={{ marginBottom: '24px' }}>
               <h3 style={sectionTitleStyle}>Topology</h3>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                {['TORUS', 'SQUARE'].map((type) => (
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {['SQUARE', 'TORUS', 'MOBIUS', 'KLEIN', 'PROJECTIVE'].map((type) => (
                   <button 
                     key={type}
                     onClick={() => setConfig(prev => ({ ...prev, topologyType: type as any }))}
                     style={{
                       ...presetBtnStyle(isDarkMode, config.topologyType === type),
-                      flex: 1, justifyContent: 'center', textAlign: 'center'
+                      flex: '1 1 30%', 
+                      justifyContent: 'center', 
+                      textAlign: 'center',
+                      fontSize: '0.85rem',
+                      padding: '8px 4px'
                     }}
                   >
                     {type}

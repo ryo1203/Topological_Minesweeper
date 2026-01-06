@@ -3,7 +3,7 @@
  * コアロジック: トポロジー、盤面管理、ソルバー、勝利判定
  */
 
-export type TopologyType = 'TORUS' | 'SQUARE';
+export type TopologyType = 'TORUS' | 'SQUARE' | 'MOBIUS' | 'KLEIN' | 'PROJECTIVE';
 export type CellStatus = 'HIDDEN' | 'OPENED' | 'FLAGGED';
 
 export interface GameConfig {
@@ -52,18 +52,10 @@ export class Topology {
                 for (let dx = -1; dx <= 1; dx++) {
                     if (dx === 0 && dy === 0) continue;
                     
-                    let nx = x + dx;
-                    let ny = y + dy;
-                    let valid = true;
+                    const targetX = x + dx;
+                    const targetY = y + dy;
 
-                    if (this.type === 'TORUS') {
-                        nx = (nx + this.width) % this.width;
-                        ny = (ny + this.height) % this.height;
-                    } else {
-                        if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) {
-                            valid = false;
-                        }
-                    }
+                    const { nx, ny, valid } = this.mapCoordinate(targetX, targetY);
 
                     if (valid) {
                         neighbors.push(this.toIndex(nx, ny));
@@ -72,6 +64,62 @@ export class Topology {
             }
             this.adjacencyList[i] = neighbors;
         }
+    }
+
+    private mapCoordinate(tx: number, ty: number): { nx: number, ny: number, valid: boolean } {
+        const w = this.width;
+        const h = this.height;
+        
+        // 何周目か
+        const loopX = Math.floor(tx / w);
+        const loopY = Math.floor(ty / h);
+
+        // 基本座標（0 ～ size-1）
+        let nx = ((tx % w) + w) % w;
+        let ny = ((ty % h) + h) % h;
+        let valid = true;
+
+        switch (this.type) {
+            case 'SQUARE':
+                if (loopX !== 0 || loopY !== 0) valid = false;
+                break;
+            case 'TORUS':
+                // 常に有効、通常のループ
+                break;
+            case 'MOBIUS':
+                // 左右ループ時(loopX)は奇数回で上下反転。
+                // 上下ループ時(loopY)はつながらない。
+                if (loopY !== 0) {
+                    valid = false;
+                } else {
+                    if (loopX % 2 !== 0) {
+                        ny = h - 1 - ny;
+                    }
+                }
+                break;
+            case 'KLEIN':
+                // 左右ループ(loopX)は通常。
+                // 上下ループ(loopY)は奇数回で左右反転。
+                if (loopY % 2 !== 0) {
+                    nx = w - 1 - nx;
+                }
+                // クラインの壺は閉曲面なので常にvalid
+                break;
+            case 'PROJECTIVE':
+                // 射影平面
+                // 左右ループ奇数回 -> 上下反転
+                if (loopX % 2 !== 0) {
+                    ny = h - 1 - ny;
+                }
+                // 上下ループ奇数回 -> 左右反転
+                if (loopY % 2 !== 0) {
+                    nx = w - 1 - nx;
+                }
+                // 閉曲面なので常にvalid
+                break;
+        }
+
+        return { nx, ny, valid };
     }
 
     getNeighbors(index: number): number[] {
